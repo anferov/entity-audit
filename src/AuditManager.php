@@ -4,6 +4,7 @@ namespace SimpleThings\EntityAudit;
 
 use Doctrine\Common\EventManager;
 use Doctrine\ORM\EntityManagerInterface;
+use Kafka\Producer;
 use SimpleThings\EntityAudit\EventListener\CreateSchemaListener;
 use SimpleThings\EntityAudit\EventListener\LogRevisionsListener;
 use SimpleThings\EntityAudit\Metadata\MetadataFactory;
@@ -30,16 +31,34 @@ class AuditManager
     private $entityManager;
 
     /**
+     * @var Producer
+     */
+    private $kafkaProducer;
+
+    private $userId;
+
+    /**
      * @param EntityManagerInterface $entityManager
      * @param AuditConfiguration $config
      */
-    public function __construct(EntityManagerInterface $entityManager, AuditConfiguration $config)
+    public function __construct(EntityManagerInterface $entityManager, AuditConfiguration $config, Producer $producer = null, $userId = null)
     {
         $this->entityManager = $entityManager;
         $this->config = $config;
         $this->metadataFactory = new Metadata\MetadataFactory($this->entityManager, $config->getMetadataDriver());
-
+        $this->kafkaProducer = $producer;
+        $this->userId = $userId;
         $this->registerEvents($entityManager->getEventManager());
+    }
+
+    public function getProducer()
+    {
+        return $this->kafkaProducer;
+    }
+
+    public function getUserId()
+    {
+        return $this->userId;
     }
 
     public function getMetadataFactory()

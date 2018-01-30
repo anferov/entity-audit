@@ -35,6 +35,7 @@ use Doctrine\ORM\Events;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Persisters\Entity\BasicEntityPersister;
 use Doctrine\ORM\Persisters\Entity\EntityPersister;
+use Kafka\Producer;
 use SimpleThings\EntityAudit\AuditManager;
 
 class LogRevisionsListener implements EventSubscriber
@@ -90,9 +91,21 @@ class LogRevisionsListener implements EventSubscriber
      */
     private $extraUpdates = [];
 
+    /**
+     * @var Producer
+     */
+    private $kafkaProducer;
+
+    private $userId;
+
+    private $userFio;
+
     public function __construct(AuditManager $auditManager)
     {
         $this->config = $auditManager->getConfiguration();
+        $this->kafkaProducer = $auditManager->getProducer();
+        $this->userId = $auditManager->getUserId();
+        $this->userFio = $auditManager->getConfiguration()->getCurrentUsername();
         $this->metadataFactory = $auditManager->getMetadataFactory();
     }
 
@@ -501,8 +514,75 @@ class LogRevisionsListener implements EventSubscriber
                 $revType
             );
         }
-
         $this->conn->executeUpdate($this->getInsertRevisionSQL($class), $params, $types);
+        echo '<pre>';
+        echo var_dump([$class, $params, $types]);
+        switch ($revType) {
+            case 'INS':
+                $type = 'create';
+                break;
+            case 'UPD':
+                $type = 'edit';
+                break;
+            case 'DEL':
+                $type = 'delete';
+                break;
+        }
+        switch ($class->getTableName()){
+            case 't_al_worker':
+            case 't_alw_absence':
+            case 't_alw_addl_info':
+            case 't_alw_education':
+            case 't_alw_experience':
+            case 't_alw_old_personal_data':
+            case 't_alw_workplace':
+            case 't_alwp_function':
+            case 't_measure_types':
+            case 't_hwi_employee_measure':
+            case 't_hwi_employee_group':
+                $objectType = 'employee';
+                break;
+            default:
+                $objectType = 'tech_equip';
+
+        }
+        $now = new \DateTime('now');
+        $this->kafkaProducer->send([[
+            'topic' => 'protocol-topic',
+            'value' => json_encode([
+                'type' => $type,
+                'objectType' => $objectType,
+                'object' => $class->getTableName(),
+                'objectId' => $entityData['id'],
+                'userId' => $this->userId,
+                'userName' => $this->userFio,
+                'cause' => 'Редактирование',//причина
+                'url' => '', // url для перехода к детализации события
+                'ip' => $this->getClientIp(),
+                'date' => $now->format('Y-m-d\TH:i:s.B\Z'),
+            ]),
+            'key' => $objectType,
+        ]]);
+    }
+
+    private function getClientIp() {
+        $ipaddress = '';
+        if (getenv('HTTP_CLIENT_IP'))
+            $ipaddress = getenv('HTTP_CLIENT_IP');
+        else if(getenv('HTTP_X_FORWARDED_FOR'))
+            $ipaddress = getenv('HTTP_X_FORWARDED_FOR');
+        else if(getenv('HTTP_X_FORWARDED'))
+            $ipaddress = getenv('HTTP_X_FORWARDED');
+        else if(getenv('HTTP_FORWARDED_FOR'))
+            $ipaddress = getenv('HTTP_FORWARDED_FOR');
+        else if(getenv('HTTP_FORWARDED'))
+            $ipaddress = getenv('HTTP_FORWARDED');
+        else if(getenv('REMOTE_ADDR'))
+            $ipaddress = getenv('REMOTE_ADDR');
+        else
+            $ipaddress = 'UNKNOWN';
+
+        return $ipaddress;
     }
 
     /**
